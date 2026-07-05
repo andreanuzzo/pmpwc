@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
 Pick My Postcode - daily Main Draw checker (Playwright).
-Renders the homepage in a headless browser and emails today's Main Draw result.
-Env: GMAIL_USER, GMAIL_APP_PASS, MAIL_TO, MY_POSTCODE (optional), DEBUG (optional).
+Logs in (postcode + email), reads today's Main Draw result, emails via Gmail.
+Env: GMAIL_USER, GMAIL_APP_PASS, MAIL_TO, PMP_POSTCODE, PMP_EMAIL,
+     MY_POSTCODE (optional), DEBUG (optional).
 """
 
 import os
@@ -20,12 +21,88 @@ UK_TZ = timezone(timedelta(hours=1))  # BST; display only
 
 POSTCODE_RE = re.compile(r"^[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2}$", re.I)
 
-# Set DEBUG=1 in the environment to print the rendered page text to the log.
 DEBUG = os.environ.get("DEBUG", "").strip() not in ("", "0", "false", "False")
+
+PMP_POSTCODE = os.environ.get("PMP_POSTCODE", "").strip()
+PMP_EMAIL = os.environ.get("PMP_EMAIL", "").strip()
+
+
+def log_in(page):
+    """Sign in to PMP using postcode + email, and clear the T&C gate."""
+    if not PMP_POSTCODE or not PMP_EMAIL:
+        raise RuntimeError(
+            "PMP_POSTCODE and PMP_EMAIL must be set (repo secrets) to log in."
+        )
+
+    for label in ("Accept T&Cs", "Accept", "I Accept", "Agree", "Got it"):
+        try:
+            btn = page.get_by_role("button", name=re.compile(label, re.I))
+            if btn.count() > 0:
+                btn.first.click(timeout=3000)
+                page.wait_for_timeout(500)
+                break
+        except Exception:
+            pass
+
+    def fill_first(selectors, value):
+        for sel in selectors:
+            try:
+                loc = page.locator(sel)
+                if loc.count() > 0:
+                    loc.first.fill(value, timeout=3000)
+                    return True
+            except Exception:
+                continue
+        return False
+
+    filled_pc = fill_first(
+        [
+            "input[placeholder*='postcode' i]",
+            "input[name*='postcode' i]",
+            "input[id*='postcode' i]",
+        ],
+        PMP_POSTCODE,
+    )
+    filled_email = fill_first(
+        [
+            "input[type='email']",
+            "input[placeholder*='email' i]",
+            "input[name*='email' i]",
+            "input[id*='email' i]",
+        ],
+        PMP_EMAIL,
+    )
+
+    if not (filled_pc and filled_email):
+        if DEBUG:
+            print(
+                f"[login] fields filled? postcode={filled_pc} email={filled_email}",
+                flush=True,
+            )
+        return
+
+    for label in ("Sign in", "Sign In", "Log in", "Login"):
+        try:
+            btn = page.get_by_role("button", name=re.compile(f"^{label}$", re.I))
+            if btn.count() > 0:
+                btn.first.click(timeout=3000)
+                break
+        except Exception:
+            pass
+    else:
+        try:
+            page.keyboard.press("Enter")
+        except Exception:
+            pass
+
+    try:
+        page.wait_for_load_state("domcontentloaded", timeout=15000)
+    except Exception:
+        pass
 
 
 def scrape_main_draw():
-    """Return dict with block text (+ whether it was the targeted block)."""
+    """Return dict with postcode/prize/drawn text, or {} if not found."""
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
@@ -38,7 +115,11 @@ def scrape_main_draw():
             )
         )
         page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60000)
-        page.wait_for_timeout(8000)  # let client-side JS inject the draw values
+        page.wait_for_timeout(3000)
+
+        log_in(page)
+
+        page.wait_for_timeout(8000)
 
         result = page.evaluate(
             """
@@ -83,7 +164,6 @@ def scrape_main_draw():
         browser.close()
 
     result = {"block": block_text or full_text, "targeted": bool(block_text)}
-
     block = result["block"]
     out = {}
 
@@ -143,7 +223,7 @@ def main():
         send_email(
             "PMP check: Main Draw postcode not found",
             "Rendered the homepage but couldn't read the Main Draw postcode.\n"
-            "The page layout may have changed.\n\n" + HOME_URL,
+            "Login may have failed or the layout changed.\n\n" + HOME_URL,
         )
         sys.exit(1)
 

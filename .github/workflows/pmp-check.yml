@@ -35,8 +35,11 @@ jobs:
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
           MY_POSTCODE: ${{ secrets.MY_POSTCODE }}
+          PMP_POSTCODE: ${{ secrets.PMP_POSTCODE }}
+          PMP_EMAIL: ${{ secrets.PMP_EMAIL }}
           DEBUG: "1"
         run: python check_pmp.py
+
 
       - name: Upload page screenshot (debug)
         if: always()
