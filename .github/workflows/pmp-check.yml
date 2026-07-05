@@ -2,8 +2,8 @@ name: PMP daily check
 
 on:
   schedule:
-    - cron: "5 11 * * *"   # 12:05 UK during BST
-    - cron: "5 12 * * *"   # 12:05 UK during GMT
+    - cron: "5 13 * * *"   # 13:05 UK during BST
+    - cron: "5 14 * * *"   # 13:05 UK during GMT
   workflow_dispatch: {}
 
 concurrency:
