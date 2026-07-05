@@ -37,15 +37,4 @@ jobs:
           MY_POSTCODE: ${{ secrets.MY_POSTCODE }}
           PMP_POSTCODE: ${{ secrets.PMP_POSTCODE }}
           PMP_EMAIL: ${{ secrets.PMP_EMAIL }}
-          DEBUG: "1"
         run: python check_pmp.py
-
-
-      - name: Upload page screenshot (debug)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: page-screenshot
-          path: page.png
-          if-no-files-found: ignore
-
