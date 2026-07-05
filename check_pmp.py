@@ -116,8 +116,8 @@ def scrape_main_draw():
         )
         page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(3000)
-
-                log_in(page)
+         
+        log_in(page)
 
         # Give client-side JS time to inject the draw values post-login.
         page.wait_for_timeout(8000)
