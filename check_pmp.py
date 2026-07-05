@@ -5,12 +5,19 @@ Pick My Postcode - daily Main Draw checker (Playwright).
 Renders the homepage in a real headless browser (so the JavaScript-injected
 winning postcode is actually present), reads TODAY'S Main Draw result from the
 Main Draw widget, and emails it via Gmail SMTP.
+
+Env vars (set as GitHub Actions secrets):
+  GMAIL_USER       - the Gmail address that sends the email
+  GMAIL_APP_PASS   - a Google app password (NOT your normal password)
+  MAIL_TO          - where to send the result (can equal GMAIL_USER)
+  MY_POSTCODE      - optional; if set, the email says whether you won
 """
 
 import os
 import re
 import smtplib
 import sys
+import traceback
 from datetime import datetime, timezone, timedelta
 from email.mime.text import MIMEText
 
@@ -25,14 +32,39 @@ POSTCODE_RE = re.compile(r"^[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2}$", re.I)
 def scrape_main_draw():
     """Return dict with postcode/prize/drawn text, or {} if not found."""
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
+        # --no-sandbox is required on GitHub-hosted runners; without it
+        # Chromium exits immediately with a sandbox error.
+        browser = p.chromium.launch(
+            headless=True,
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+        )
         page = browser.new_page(
             user_agent=(
                 "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
                 "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
             )
         )
-        page.goto(HOME_URL, wait_until="networkidle", timeout=60000)
+        # Site is ad/cookie heavy and may never reach true network idle, so
+        # wait for DOM content then wait for the JS widget to inject the
+        # postcode, rather than blocking on networkidle (which can time out).
+        page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60000)
+        try:
+            page.wait_for_function(
+                """() => {
+                  const heads = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5'));
+                  const h = heads.find(x => x.textContent.trim().toLowerCase() === 'main draw');
+                  if (!h) return false;
+                  let n = h;
+                  for (let i = 0; i < 6 && n && n.parentElement; i++) {
+                    n = n.parentElement;
+                    if (/Drawn/i.test(n.textContent)) break;
+                  }
+                  return n && /[A-Z]{1,2}\\d{1,2}[A-Z]?\\s?\\d[A-Z]{2}/i.test(n.textContent);
+                }""",
+                timeout=30000,
+            )
+        except Exception:
+            pass  # evaluate below will report if it's still empty
 
         result = page.evaluate(
             """
@@ -97,11 +129,19 @@ def main():
     today = datetime.now(UK_TZ).strftime("%-d %B %Y")
     try:
         data = scrape_main_draw()
-    except Exception as e:  # noqa: BLE001
-        send_email(
-            "PMP check FAILED",
-            f"The checker errored while rendering the page:\n\n{e!r}\n\n{HOME_URL}",
-        )
+    except Exception:  # noqa: BLE001 - surface any browser/render failure by email
+        traceback.print_exc()
+        sys.stderr.flush()
+        try:
+            send_email(
+                "PMP check FAILED",
+                "The checker errored while rendering the page:\n\n"
+                + traceback.format_exc()
+                + "\n" + HOME_URL,
+            )
+        except Exception:  # noqa: BLE001 - email may fail too; traceback already printed
+            traceback.print_exc()
+            sys.stderr.flush()
         sys.exit(1)
 
     if not data.get("postcode"):
