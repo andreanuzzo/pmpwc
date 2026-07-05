@@ -239,7 +239,10 @@ def main():
     if prize:
         lines.append(f"Prize: {prize}")
 
-    my_pc = os.environ.get("MY_POSTCODE", "").strip().upper()
+    # Which postcode to check against the winner. Defaults to the login
+    # postcode (PMP_POSTCODE) so you only need to set one secret; set
+    # MY_POSTCODE only if you want to check a different postcode.
+    my_pc = (os.environ.get("MY_POSTCODE", "").strip() or PMP_POSTCODE).upper()
     won = False
     if my_pc:
         won = re.sub(r"\s+", " ", my_pc) == postcode
