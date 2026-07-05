@@ -1,16 +1,8 @@
 #!/usr/bin/env python3
 """
 Pick My Postcode - daily Main Draw checker (Playwright).
-
-Renders the homepage in a real headless browser (so the JavaScript-injected
-winning postcode is actually present), reads TODAY'S Main Draw result from the
-Main Draw widget, and emails it via Gmail SMTP.
-
-Env vars (set as GitHub Actions secrets):
-  GMAIL_USER       - the Gmail address that sends the email
-  GMAIL_APP_PASS   - a Google app password (NOT your normal password)
-  MAIL_TO          - where to send the result (can equal GMAIL_USER)
-  MY_POSTCODE      - optional; if set, the email says whether you won
+Renders the homepage in a headless browser and emails today's Main Draw result.
+Env: GMAIL_USER, GMAIL_APP_PASS, MAIL_TO, MY_POSTCODE (optional), DEBUG (optional).
 """
 
 import os
@@ -28,12 +20,13 @@ UK_TZ = timezone(timedelta(hours=1))  # BST; display only
 
 POSTCODE_RE = re.compile(r"^[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2}$", re.I)
 
+# Set DEBUG=1 in the environment to print the rendered page text to the log.
+DEBUG = os.environ.get("DEBUG", "").strip() not in ("", "0", "false", "False")
+
 
 def scrape_main_draw():
-    """Return dict with postcode/prize/drawn text, or {} if not found."""
+    """Return dict with block text (+ whether it was the targeted block)."""
     with sync_playwright() as p:
-        # --no-sandbox is required on GitHub-hosted runners; without it
-        # Chromium exits immediately with a sandbox error.
         browser = p.chromium.launch(
             headless=True,
             args=["--no-sandbox", "--disable-dev-shm-usage"],
@@ -44,49 +37,52 @@ def scrape_main_draw():
                 "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
             )
         )
-        # Site is ad/cookie heavy and may never reach true network idle, so
-        # wait for DOM content then wait for the JS widget to inject the
-        # postcode, rather than blocking on networkidle (which can time out).
         page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60000)
-        try:
-            page.wait_for_function(
-                """() => {
-                  const heads = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5'));
-                  const h = heads.find(x => x.textContent.trim().toLowerCase() === 'main draw');
-                  if (!h) return false;
-                  let n = h;
-                  for (let i = 0; i < 6 && n && n.parentElement; i++) {
-                    n = n.parentElement;
-                    if (/Drawn/i.test(n.textContent)) break;
-                  }
-                  return n && /[A-Z]{1,2}\\d{1,2}[A-Z]?\\s?\\d[A-Z]{2}/i.test(n.textContent);
-                }""",
-                timeout=30000,
-            )
-        except Exception:
-            pass  # evaluate below will report if it's still empty
+        page.wait_for_timeout(8000)  # let client-side JS inject the draw values
 
         result = page.evaluate(
             """
             () => {
-              const heads = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5'));
-              const mainHead = heads.find(h => h.textContent.trim().toLowerCase() === 'main draw');
-              if (!mainHead) return null;
-              let node = mainHead;
-              for (let i = 0; i < 6 && node && node.parentElement; i++) {
-                node = node.parentElement;
-                if (/Drawn/i.test(node.textContent)) break;
+              const out = { block: null, full: (document.body.innerText || '') };
+              const all = Array.from(document.querySelectorAll('body *'));
+              const label = all.find(el => {
+                const t = (el.textContent || '').trim();
+                return /^main draw\\b/i.test(t) && t.length < 40;
+              });
+              if (label) {
+                let node = label;
+                for (let i = 0; i < 8 && node && node.parentElement; i++) {
+                  node = node.parentElement;
+                  if (/Drawn/i.test(node.textContent) &&
+                      /[A-Z]{1,2}\\d{1,2}[A-Z]?\\s?\\d[A-Z]{2}/i.test(node.textContent)) {
+                    break;
+                  }
+                }
+                if (node) out.block = node.innerText || node.textContent || '';
               }
-              if (!node) return null;
-              const text = node.innerText || node.textContent || '';
-              return { block: text };
+              return out;
             }
             """
         )
+
+        try:
+            page.screenshot(path="page.png", full_page=True)
+        except Exception:
+            pass
+
+        full_text = (result or {}).get("full", "") or ""
+        block_text = (result or {}).get("block")
+
+        if DEBUG:
+            print("----- FULL PAGE TEXT (first 3000 chars) -----", flush=True)
+            print(full_text[:3000], flush=True)
+            print("----- TARGETED BLOCK -----", flush=True)
+            print(block_text, flush=True)
+            print("----- END DEBUG -----", flush=True)
+
         browser.close()
 
-    if not result or not result.get("block"):
-        return {}
+    result = {"block": block_text or full_text, "targeted": bool(block_text)}
 
     block = result["block"]
     out = {}
@@ -129,17 +125,16 @@ def main():
     today = datetime.now(UK_TZ).strftime("%-d %B %Y")
     try:
         data = scrape_main_draw()
-    except Exception:  # noqa: BLE001 - surface any browser/render failure by email
+    except Exception:  # noqa: BLE001
         traceback.print_exc()
         sys.stderr.flush()
         try:
             send_email(
                 "PMP check FAILED",
                 "The checker errored while rendering the page:\n\n"
-                + traceback.format_exc()
-                + "\n" + HOME_URL,
+                + traceback.format_exc() + "\n" + HOME_URL,
             )
-        except Exception:  # noqa: BLE001 - email may fail too; traceback already printed
+        except Exception:  # noqa: BLE001
             traceback.print_exc()
             sys.stderr.flush()
         sys.exit(1)
