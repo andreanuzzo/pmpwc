@@ -117,34 +117,17 @@ def scrape_main_draw():
         page.goto(HOME_URL, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(3000)
 
-        log_in(page)
+                log_in(page)
 
+        # Give client-side JS time to inject the draw values post-login.
         page.wait_for_timeout(8000)
 
-        result = page.evaluate(
-            """
-            () => {
-              const out = { block: null, full: (document.body.innerText || '') };
-              const all = Array.from(document.querySelectorAll('body *'));
-              const label = all.find(el => {
-                const t = (el.textContent || '').trim();
-                return /^main draw\\b/i.test(t) && t.length < 40;
-              });
-              if (label) {
-                let node = label;
-                for (let i = 0; i < 8 && node && node.parentElement; i++) {
-                  node = node.parentElement;
-                  if (/Drawn/i.test(node.textContent) &&
-                      /[A-Z]{1,2}\\d{1,2}[A-Z]?\\s?\\d[A-Z]{2}/i.test(node.textContent)) {
-                    break;
-                  }
-                }
-                if (node) out.block = node.innerText || node.textContent || '';
-              }
-              return out;
-            }
-            """
-        )
+        # Read the full rendered page text and parse the Main Draw block by its
+        # exact content sequence. The DOM has two "Main Draw" labels (a nav item
+        # and the real widget), so structural climbing is unreliable; this
+        # content pattern is stable:
+        #     Main Draw / Drawn <date> / <postcode> / <prize>
+        result = page.evaluate("() => ({ full: document.body.innerText || '' })")
 
         try:
             page.screenshot(path="page.png", full_page=True)
@@ -152,39 +135,45 @@ def scrape_main_draw():
             pass
 
         full_text = (result or {}).get("full", "") or ""
-        block_text = (result or {}).get("block")
 
         if DEBUG:
             print("----- FULL PAGE TEXT (first 3000 chars) -----", flush=True)
             print(full_text[:3000], flush=True)
-            print("----- TARGETED BLOCK -----", flush=True)
-            print(block_text, flush=True)
             print("----- END DEBUG -----", flush=True)
 
         browser.close()
 
-    result = {"block": block_text or full_text, "targeted": bool(block_text)}
-    block = result["block"]
     out = {}
 
     m = re.search(
-        r"Drawn\s+(\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+(?:\s+\d{4})?)", block, re.I
+        r"Main Draw\s+Drawn\s+"
+        r"(?P<date>\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+(?:\s+\d{4})?)\s+"
+        r"(?P<postcode>[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2})\s+"
+        r"(?P<prize>£[\d,]+(?:\.\d{2})?)",
+        full_text,
+        re.I,
     )
     if m:
-        out["drawn"] = m.group(1).strip()
+        out["drawn"] = m.group("date").strip()
+        out["postcode"] = re.sub(r"\s+", " ", m.group("postcode").strip().upper())
+        out["prize"] = m.group("prize").replace(" ", "")
+        return out
 
-    search_area = block[m.end():] if m else block
-    for token in re.findall(r"[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2}", search_area, re.I):
-        if POSTCODE_RE.match(token.strip()):
-            out["postcode"] = re.sub(r"\s+", " ", token.strip().upper())
-            break
-
-    pm = re.search(r"£\s?[\d,]+(?:\.\d{2})?", search_area)
-    if pm:
-        out["prize"] = pm.group(0).replace(" ", "")
+    m2 = re.search(
+        r"Drawn\s+(?P<date>\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+(?:\s+\d{4})?)\s+"
+        r"(?P<postcode>[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2})",
+        full_text,
+        re.I,
+    )
+    if m2:
+        out["drawn"] = m2.group("date").strip()
+        out["postcode"] = re.sub(r"\s+", " ", m2.group("postcode").strip().upper())
+        after = full_text[m2.end():]
+        pm = re.search(r"£[\d,]+(?:\.\d{2})?", after)
+        if pm:
+            out["prize"] = pm.group(0)
 
     return out
-
 
 def send_email(subject, body):
     user = os.environ["GMAIL_USER"]
