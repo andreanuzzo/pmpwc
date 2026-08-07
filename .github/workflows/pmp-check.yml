@@ -1,4 +1,4 @@
-name: PMP check debug
+name: PMP check
 
 on:
   workflow_dispatch:
