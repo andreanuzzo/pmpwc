@@ -143,15 +143,22 @@ def scrape_main_draw():
 
         browser.close()
 
+        # normalize weird whitespace (NBSP etc) and limit size for regex stability
+    full_text = full_text.replace("\u00A0", " ").strip()
+
     out = {}
 
+    # Try a robust pattern: allow arbitrary content between date, postcode and prize.
+    # Use DOTALL so '.' matches newlines. Non-greedy matching keeps it local.
     m = re.search(
         r"Main Draw\s+Drawn\s+"
-        r"(?P<date>\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+(?:\s+\d{4})?)\s+"
-        r"(?P<postcode>[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2})\s+"
+        r"(?P<date>\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+(?:\s+\d{4})?)"
+        r".{0,3000}?"  # allow intervening content (ads, spacing) up to a reasonable limit
+        r"(?P<postcode>[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2})"
+        r".{0,300}?"   # allow small intervening content before prize
         r"(?P<prize>£[\d,]+(?:\.\d{2})?)",
         full_text,
-        re.I,
+        re.I | re.S,
     )
     if m:
         out["drawn"] = m.group("date").strip()
@@ -159,21 +166,27 @@ def scrape_main_draw():
         out["prize"] = m.group("prize").replace(" ", "")
         return out
 
-    m2 = re.search(
-        r"Drawn\s+(?P<date>\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+(?:\s+\d{4})?)\s+"
-        r"(?P<postcode>[A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2})",
+    # Fallback: find the first 'Drawn <date>' then the first postcode after that,
+    # then look for a prize after the postcode.
+    m_date = re.search(
+        r"Drawn\s+(?P<date>\d{1,2}(?:st|nd|rd|th)?\s+[A-Za-z]+(?:\s+\d{4})?)",
         full_text,
         re.I,
     )
-    if m2:
-        out["drawn"] = m2.group("date").strip()
-        out["postcode"] = re.sub(r"\s+", " ", m2.group("postcode").strip().upper())
-        after = full_text[m2.end():]
-        pm = re.search(r"£[\d,]+(?:\.\d{2})?", after)
-        if pm:
-            out["prize"] = pm.group(0)
+    if m_date:
+        out["drawn"] = m_date.group("date").strip()
+        after_date = full_text[m_date.end():]
 
+        # find first postcode after the date
+        m_pc = re.search(r"([A-Z]{1,2}\d{1,2}[A-Z]?\s?\d[A-Z]{2})", after_date, re.I)
+        if m_pc:
+            out["postcode"] = re.sub(r"\s+", " ", m_pc.group(1).strip().upper())
+            after_pc = after_date[m_pc.end():]
+            m_prize = re.search(r"(£[\d,]+(?:\.\d{2})?)", after_pc)
+            if m_prize:
+                out["prize"] = m_prize.group(1).replace(" ", "")
     return out
+
 
 def send_email(subject, body):
     user = os.environ["GMAIL_USER"]
