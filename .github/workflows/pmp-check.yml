@@ -1,18 +1,12 @@
-name: PMP daily check
+name: PMP check debug
 
 on:
-  schedule:
-    - cron: "5 9 * * *"   # 13:05 UK time
-  workflow_dispatch: {}
-
-concurrency:
-  group: pmp-check
-  cancel-in-progress: false
+  workflow_dispatch:
 
 jobs:
-  check:
+  debug:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
@@ -28,12 +22,30 @@ jobs:
           pip install -r requirements.txt
           python -m playwright install --with-deps chromium
 
-      - name: Run PMP check
+      - name: Show DEBUG env (diagnostic)
+        run: |
+          echo "DEBUG in shell: $DEBUG"
+          python - <<'PY'
+import os
+print("DEBUG in Python repr:", repr(os.environ.get("DEBUG")))
+PY
+
+      - name: Run check_pmp.py (force DEBUG=1)
         env:
+          DEBUG: "1"
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           MAIL_TO: ${{ secrets.MAIL_TO }}
           MY_POSTCODE: ${{ secrets.MY_POSTCODE }}
           PMP_POSTCODE: ${{ secrets.PMP_POSTCODE }}
           PMP_EMAIL: ${{ secrets.PMP_EMAIL }}
-        run: python check_pmp.py
+        run: |
+          python -u check_pmp.py 2>&1 | tee check_pmp.log || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pmp-diagnostics
+          path: |
+            check_pmp.log
+            page.png
