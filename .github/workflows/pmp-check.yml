@@ -1,8 +1,10 @@
 name: PMP check
 
 on:
-  workflow_dispatch:
-
+  schedule:
+    - cron: "5 13 * * *"   
+  workflow_dispatch: {}
+  
 jobs:
   debug:
     runs-on: ubuntu-latest
