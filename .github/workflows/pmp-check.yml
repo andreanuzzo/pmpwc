@@ -15,21 +15,18 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
+    
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           python -m playwright install --with-deps chromium
-
+    
       - name: Show DEBUG env (diagnostic)
         run: |
           echo "DEBUG in shell: $DEBUG"
-          python - <<'PY'
-import os
-print("DEBUG in Python repr:", repr(os.environ.get("DEBUG")))
-PY
-
+          python -c "import os; print('DEBUG in Python repr:', repr(os.environ.get('DEBUG')))"
+    
       - name: Run check_pmp.py (force DEBUG=1)
         env:
           DEBUG: "1"
@@ -41,7 +38,7 @@ PY
           PMP_EMAIL: ${{ secrets.PMP_EMAIL }}
         run: |
           python -u check_pmp.py 2>&1 | tee check_pmp.log || true
-
+    
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
