@@ -1,0 +1,49 @@
+name: PMP check (debug/manual)
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Show DEBUG env (diagnostic)
+        run: |
+          echo "DEBUG in shell: $DEBUG"
+          python -c "import os; print('DEBUG in Python repr:', repr(os.environ.get('DEBUG')))"
+
+      - name: Run PMP check (DEBUG=1, capture logs)
+        env:
+          DEBUG: "1"
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          MY_POSTCODE: ${{ secrets.MY_POSTCODE }}
+          PMP_POSTCODE: ${{ secrets.PMP_POSTCODE }}
+          PMP_EMAIL: ${{ secrets.PMP_EMAIL }}
+        run: |
+          # run unbuffered so tee shows live output; allow non-zero exit without failing the job
+          python -u check_pmp.py 2>&1 | tee check_pmp.log || true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: pmp-diagnostics
+          path: |
+            check_pmp.log
+            page.png
