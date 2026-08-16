@@ -33,3 +33,19 @@ jobs:
           PMP_POSTCODE: ${{ secrets.PMP_POSTCODE }}
           PMP_EMAIL: ${{ secrets.PMP_EMAIL }}
         run: python check_pmp.py
+
+  trigger-debug-on-failure:
+    needs: main
+    if: failure()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger debug workflow
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.actions.createWorkflowDispatch({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              workflow_id: 'debug.yml',
+              ref: context.ref
+            });
